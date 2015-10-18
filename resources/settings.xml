@@ -2,8 +2,11 @@
 <settings>
   <!-- General -->
   <category label="设置">
-    <setting id="username" type="text" label="用户名" values="" default="" />
-    <setting id="password" type="text" label="密码" values="" default="" />
-	<setting id="select" type="enum" label="清晰度" values="普清|高清|原码|每次提示" default="1"/>
+	<setting id="prefer115server" type="enum" label="线路选择" values="电信|联通|铁通/移动|长宽" default="0"/>
+	<setting id="subtitle" type="bool" label="站内字幕" default="true"/>
+	<setting id="select" type="enum" label="清晰度" values="每次提示|普清|高清|超清|1080p|原码" default="0"/>
+	<setting id="pageitem" type="enum" label="页面项目数" values="25|50|100" default="0"/>
+	<setting id="sorttype" type="enum" label="排序类型" values="日期|大小|名称" default="0"/>
+	<setting id="sortasc" type="enum" label="排序方式" values="降序|升序" default="0"/>	
   </category>
 </settings>
