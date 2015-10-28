@@ -5,8 +5,14 @@
 	<setting id="prefer115server" type="enum" label="线路选择" values="电信|联通|铁通/移动|长宽" default="0"/>
 	<setting id="subtitle" type="bool" label="站内字幕" default="true"/>
 	<setting id="select" type="enum" label="清晰度" values="每次提示|普清|高清|超清|1080p|原码" default="0"/>
+	<setting id="magnetsearch" type="enum" label="磁力网站" values="每次提示|icili主站|icili备站|btbook|bt2mag" default="0"/>
+  </category>
+  <category label="显示设置">
+  	<setting id="videoext" type="text" label="视频文件扩展名" default="mkv,mp4,m4v,mov,flv,wmv,asf,avi,m2ts,mts,m2t,ts,mpg,mpeg,3gp,rmvb,rm,iso"/>
+	<setting id="musicext" type="text" label="音乐文件扩展名" default="wav,flac,mp3,ogg,m4a,ape,dff,dsf,wma,ra"/>
+	<setting id="imageext" type="text" label="图像文件扩展名" default="jpg,jpeg,bmp,tif,tiff,png,gif"/>
 	<setting id="pageitem" type="enum" label="页面项目数" values="25|50|100" default="0"/>
 	<setting id="sorttype" type="enum" label="排序类型" values="日期|大小|名称" default="0"/>
-	<setting id="sortasc" type="enum" label="排序方式" values="降序|升序" default="0"/>	
+	<setting id="sortasc" type="enum" label="排序方式" values="降序|升序" default="0"/>
   </category>
 </settings>
