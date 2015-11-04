@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 # default.py
-import urllib,urllib2,re,xbmcplugin,xbmcgui,subprocess,sys,os,os.path,sys,xbmcaddon,xbmcvfs,random,hashlib,threading
+import urllib,urllib2,re,xbmcplugin,xbmcgui,subprocess,sys,os,os.path,sys,xbmcaddon,xbmcvfs,random,hashlib,threading,httplib,ssl,socket
 import json,cookielib,gzip,time
 import xbmc
 
 from bt import TorrentFile
-from xbmcswift2 import Plugin, CLI_MODE, xbmcaddon,ListItem
+from xbmcswift2 import Plugin, CLI_MODE, xbmcaddon,ListItem,actions
 from StringIO import StringIO
 from zhcnkbd import Keyboard
 
@@ -16,11 +16,15 @@ __addonid__ = "plugin.video.115"
 __addon__ = xbmcaddon.Addon(id=__addonid__)
 __cwd__ = __addon__.getAddonInfo('path')
 __resource__  = xbmc.translatePath( os.path.join( __cwd__, 'lib' ) )
-__subpath__       = xbmc.translatePath( os.path.join( __cwd__, 'subtitles') ).decode("utf-8")
+
+__subpath__  = xbmc.translatePath( os.path.join( __cwd__, 'subtitles') ).decode("utf-8")
 if not os.path.exists(__subpath__):
     os.makedirs(__subpath__)
 sys.path.append (__resource__)
-colors = {'back': '7FFF00','dir': '8B4513','video': 'FF0000','next': 'CCCCFF','bt': '660066', 'audio': '0000FF', 'subtitle':'505050', 'image': '00FFFF', '-1':'FF0000','0':'8B4513','1':'CCCCFF','2':'7FFF00', 'menu':'FFFF00'}
+sys.path.append (xbmc.translatePath( os.path.join(__resource__,'nova') ))
+import nova2
+
+colors = {'back': '7FFF00','dir': '8B4513','video': 'FF0000','next': 'CCCCFF','bt': '33FF00', 'audio': '0000FF', 'subtitle':'505050', 'image': '00FFFF', '-1':'FF0000','0':'8B4513','1':'CCCCFF','2':'7FFF00', 'menu':'FFFF00', 'star1':'FFFF00','star0':'777777'}
 
 ALL_VIEW_CODES = {
     'list': {
@@ -52,10 +56,11 @@ plugin = Plugin()
 ppath = plugin.addon.getAddonInfo('path')
 videoexts=plugin.get_setting('videoext').lower().split(',')
 musicexts=plugin.get_setting('musicext').lower().split(',')
-cookiefile = os.path.join(ppath, 'cookie.dat')
 
+cookiefile = os.path.join(ppath, 'cookie.dat')
 subcache = plugin.get_storage('subcache')
 filters = plugin.get_storage('ftcache', TTL=1440)
+
 #urlcache = plugin.get_storage('urlcache', TTL=5)
 setthumbnail=plugin.get_storage('setthumbnail')
 setthumbnail['set']=False
@@ -227,12 +232,12 @@ def index():
 	if not data['state']:
 		login()
 	item = [
-		{'label': '网盘', 'path': plugin.url_for('getfile',cid='0',offset=0,star='0')},
+		{'label': '网盘文件', 'path': plugin.url_for('getfile',cid='0',offset=0,star='0')},
 		{'label': '星标列表', 'path': plugin.url_for('getfile',cid='0',offset=0,star='1')},
 		#{'label': '记事本', 'path': plugin.url_for('note',cid='0',offset=0)},
 		{'label': '离线任务列表', 'path': plugin.url_for('offline_list')},
-		{'label': '搜索', 'path': plugin.url_for('search',mstr='0',offset=0)},
-		{'label': '磁力搜索', 'path': plugin.url_for('btsearch',website='0',sstr='0',sorttype='-1',page='1')},
+		{'label': '网盘搜索', 'path': plugin.url_for('search',mstr='0',offset=0)},
+		{'label': '磁力搜索', 'path': plugin.url_for('btsearchInit',sstr='0')},		
 		{'label': '豆瓣电影', 'path': plugin.url_for('dbmovie')},
         {'label': '豆瓣影人搜索', 'path': plugin.url_for('dbactor', sstr='none', page=0)},
         {'label': '豆瓣电影新片榜TOP10', 'path': plugin.url_for('dbntop')},
@@ -287,9 +292,40 @@ def search(mstr,offset):
 	else:
 		plugin.notify(msg='数据获取失败,错误信息:'+str(data['error']))
 		return
-		
-@plugin.route('/btsearch/<website>/<sstr>/<sorttype>/<page>')
-def btsearch(website,sstr,sorttype,page):	
+
+class TLS1Connection(httplib.HTTPSConnection):
+	"""Like HTTPSConnection but more specific"""
+	def __init__(self, host, **kwargs):
+		httplib.HTTPSConnection.__init__(self, host, **kwargs)
+
+	def connect(self):
+		"""Overrides HTTPSConnection.connect to specify TLS version"""
+		# Standard implementation from HTTPSConnection, which is not
+		# designed for extension, unfortunately
+		sock = socket.create_connection((self.host, self.port),
+				self.timeout, self.source_address)
+		if getattr(self, '_tunnel_host', None):
+			self.sock = sock
+			self._tunnel()
+
+		# This is the only difference; default wrap_socket uses SSLv23
+		self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file,
+				ssl_version=ssl.PROTOCOL_TLSv1)
+
+class TLS1Handler(urllib2.HTTPSHandler):
+	"""Like HTTPSHandler but more specific"""
+	def __init__(self):
+		urllib2.HTTPSHandler.__init__(self)
+
+	def https_open(self, req):
+		return self.do_open(TLS1Connection, req)
+
+
+# Override default handler
+urllib2.install_opener(urllib2.build_opener(TLS1Handler()))
+
+@plugin.route('/btsearchInit/<sstr>')
+def btsearchInit(sstr=''):	
 	if not sstr or sstr=='0':
 		kb = Keyboard('',u'请输入搜索关键字')
 		kb.doModal()
@@ -298,96 +334,36 @@ def btsearch(website,sstr,sorttype,page):
 		sstr = kb.getText()
 		if not sstr:
 			return
-	if website=='0':
-		website=plugin.get_setting('magnetsearch')	
-		
-	if website=='0':
-		dialog = xbmcgui.Dialog()
-		websites = ['icili主站','icili2备站','btbook','bt2mag']
-		website = dialog.select('磁力网站', websites)
-		if website is -1: return
-		website=str(website+1)
-
-
-	sorttype=int(sorttype)		
+	btenginelist=nova2.initialize_engines()
+	#plugin.notify(len(btenginelist))
 	items=[]
-	
-	if website=='1':
-		searchbase='http://icili.net'
-		searchurl=searchbase+'/list/'+urllib.quote(sstr)+'/'+str(page)
-		rmain=r'"title" href="(?P<href>.*?)">(?P<title>.*?)</a>.*?收录时间.*?>(?P<createtime>.*?)<.*?活跃热度.*?>(?P<heatlevel>.*?)<.*?最后活跃.*?>(?P<lastdown>.*?)<.*?文件大小.*?>(?P<filesize>.*?)<'
-	if website=='2':
-		searchbase='http://icili.net'
-		searchurl=searchbase+'/a/list/'+urllib.quote(sstr)+'/'+str(page)
-		rmain=r'"title" href="(?P<href>.*?)">.*?"item-list">(?P<title>.*?)</div>.*?大小:<span>(?P<filesize>.*?)</span>.*?文件数:<span>(?P<filecount>.*?)</span>.*?创建日期:<span>(?P<createtime>.*?)</span>.*?热度:<span>(?P<heatlevel>.*?)</span>'
-	elif website=='3':
-		searchbase='http://www.btbook.net/search/'		
-		rmain=r'target="_blank">(?P<title>.*?)</a>.*?<ul>(?P<filelist>.*?)</ul>.*?fileType[0-9]*?">(?P<filetype>.*?)</span>.*?创建时间.*?<b.*?>(?P<createtime>.*?)</b>.*?文件大小.*?<b.*?>(?P<filesize>.*?)</b>.*?下载热度.*?<b.*?>(?P<heatlevel>.*?)</b>.*?最近下载.*?<b.*?>(?P<lastdown>.*?)</b>.*?href="(?P<magnet>.*?)"'
-		if sorttype<0:
-			dialog = xbmcgui.Dialog()
-			sorttype=dialog.select('btbook搜索-选择排序类型',['创建时间','文件大小','下载热度','相关度'])
-			if sorttype==-1:
-				return
-		searchurl=searchbase+urllib.quote(sstr)+'/'+str(page)+'-'+str(sorttype+1)+'.html'
-	elif website=='4':
-		searchbase='http://www.bt2mag.com/search/'
-		searchurl=searchbase+urllib.quote(sstr)+'/currentPage/'+str(page)
-		rmain=r'<div\x20class="row">.*?<a\x20href="(?P<href>.*?)"\x20title="(?P<title>.*?)">.*?Size:(?P<filesize>.*?)\x20/\x20Convert\x20Date:(?P<createtime>.*?)</div>'
-	#data=xl.urlopen(searchurl)
-	#data=xl.fetch(data)
-	data=_http(searchurl)	
-	reobj = re.compile(rmain, re.DOTALL)
-	
-	for match in reobj.finditer(data):
-		title=match.group('title')
-		filesize=match.group('filesize')
-		createtime=match.group('createtime')
-		
-		if website=='1':
-			title=title.replace('<span class="highlight">','').replace('</span>','')
-			filemsg='大小：'+filesize+'  创建时间：'+createtime		
-			detialdata=_http(searchbase+match.group('href'))		
-			detailreobj = re.compile(r'磁力链接：.*?href="(?P<magnet>.*?)">', re.DOTALL)		
-			detailmatch = detailreobj.search(detialdata)
-			if detailmatch:
-				magnet = detailmatch.group('magnet')			
-			else:
-				magnet = ''	
-		if website=='2':			
-			filemsg='大小：'+filesize+'  创建时间：'+createtime		
-			magnet=match.group('href')[match.group('href').rfind('/')+1:]			
-			magnet='magnet:?xt=urn:btih:'+magnet
-		elif website=='3':
-			title=title.replace('<b>','').replace('</b>','')
-			lireobj=re.compile(r'<li>(?P<filename>.*?)<span', re.DOTALL)
-			filelist=lireobj.finditer(match.group('filelist'))			
-			filemsg='大小：'+filesize+'  创建时间：'+createtime+'\r\n文件列表：'
-			for f in filelist:
-				filemsg=filemsg+'\r\n'+f.group('filename')
-			magnet=match.group('magnet')
-		
-		elif website=='4':
-			filemsg='大小：'+filesize+'  创建时间：'+createtime
-			magnet=match.group('href')[match.group('href').rfind('/')+1:]			
-			magnet='magnet:?xt=urn:btih:'+magnet
-			
-		if magnet:
-			listitem=ListItem(label=colorize_label(title, 'bt'), label2=filesize, icon=None, thumbnail=None, path=plugin.url_for('offlinedown',url=magnet.encode('UTF-8'),title=title,msg=filemsg))
+	for btengine in btenginelist:
+		if plugin.get_setting(btengine).lower()=='true':
+			items.append({'label': '在[COLOR FFFFFF00]%s[/COLOR]搜索[COLOR FF00FFFF]%s[/COLOR]'%(btengine,sstr), 'path': plugin.url_for('btsearch',website=btengine,sstr=sstr,sorttype='-1',page='1')})
+	return items
+
+@plugin.route('/btsearch/<website>/<sstr>/<sorttype>/<page>')
+def btsearch(website,sstr,sorttype,page):	
+	if not sstr or sstr=='0':
+		return
+	items=[]
+	result=nova2.enginesearch(website,sstr,sorttype,page)
+	#plugin.notify(result['state'])
+	if result['state']:
+		for res_dict in result['list']:
+			title=res_dict['name'].encode('UTF-8')
+			filemsg ='大小：'+res_dict['size'].encode('UTF-8')+'  创建时间：'+res_dict['date'].encode('UTF-8')
+			listitem=ListItem(label=colorize_label(title, 'bt'), label2=res_dict['size'], icon=None, thumbnail=None, path=plugin.url_for('offlinedown',url=res_dict['link'].encode('UTF-8'),title=title,msg=filemsg))
 			items.append(listitem)
-	
-	if website=='1':		
-		nextpage=str(int(page)+1)
-		if data.find('/'+nextpage+'">'+nextpage+'</a></li>')>=0:		
-			items.append({'label': colorize_label('下一页', 'next'), 'path': plugin.url_for('btsearch',website=website,sstr=sstr,sorttype=str(sorttype),page=str(int(page)+1))})
-	elif website=='3':
-		if data.find('html"> &gt; </a>')>=0:		
-			items.append({'label': colorize_label('下一页', 'next'), 'path': plugin.url_for('btsearch',website=website,sstr=sstr,sorttype=str(sorttype),page=str(int(page)+1))})
-	elif website=='4':
-		if data.find('>Next\x20<span')>=0:
-			items.append({'label': colorize_label('下一页', 'next'), 'path': plugin.url_for('btsearch',website=website,sstr=sstr,sorttype=str(sorttype),page=str(int(page)+1))})
+		if result.has_key('nextpage'):
+			if result['nextpage']:
+				if result.has_key('sorttype'):
+					sorttype=result['sorttype']
+				items.append({'label': colorize_label('下一页', 'next'), 'path': plugin.url_for('btsearch',website=website,sstr=sstr,sorttype=str(sorttype),page=str(int(page)+1))})
 	return items
 
 def getListItem(item):
+	context_menu_items=[]
 	if item.has_key('sha'):
 		if item.has_key('iv'):			
 			listitem=ListItem(label=colorize_label(item['n'], 'video'), label2=None, icon=None, thumbnail=None, path=plugin.url_for('play',pc=item['pc'],name=item['n'].encode('UTF-8'),iso='0'))
@@ -420,14 +396,65 @@ def getListItem(item):
 		
 		if item.has_key('u') and  listitem!=None:
 			listitem.set_thumbnail(item['u'])
+		
+			
+		if listitem!=None and item.has_key('cid') and item.has_key('fid'):
+			warringmsg='是否删除文件:'+item['n'].encode('UTF-8')
+			deleteurl=plugin.url_for('deletefile',pid=item['cid'],fid=item['fid'],warringmsg=warringmsg)
+			context_menu_items.append(('删除', 'RunPlugin('+deleteurl+')',))
 	else:
 		listitem=ListItem(label=colorize_label(item['n'], 'dir'), label2=None, icon=None, thumbnail=None, path=plugin.url_for('getfile',cid=item['cid'],offset=0,star='0'))
+		if item.has_key('cid') and item.has_key('pid'):
+			warringmsg='是否删除目录及其下所有文件:'+item['n'].encode('UTF-8')
+			#listitem.add_context_menu_items([('删除', 'RunPlugin('+plugin.url_for('deletefile',pid=item['pid'],fid=item['cid'],warringmsg=warringmsg)+')',)],False)
+			deleteurl=plugin.url_for('deletefile',pid=item['pid'],fid=item['cid'],warringmsg=warringmsg)
+			context_menu_items.append(('删除', 'RunPlugin('+deleteurl+')',))
+			
+	if item.has_key('m') and  listitem!=None:
+		listitem.set_property('is_mark',str(item['m']))
+		listitem.label=colorize_label('★', 'star'+str(item['m']))+listitem.label
+		if item.has_key('fid'):
+			fid=item['fid']
+		else:
+			fid=item['cid']
+		if str(item['m'])=='0':
+			#listitem.add_context_menu_items([('星标', 'RunPlugin('+plugin.url_for('mark',fid=fid,mark='1')+')',)],False)
+			context_menu_items.append(('星标', 'RunPlugin('+plugin.url_for('mark',fid=fid,mark='1')+')',))
+		else:
+			#listitem.add_context_menu_items([('取消星标', 'RunPlugin('+plugin.url_for('mark',fid=fid,mark='0')+')',)],False)
+			context_menu_items.append(('取消星标', 'RunPlugin('+plugin.url_for('mark',fid=fid,mark='0')+')',))
+	if len(context_menu_items)>0:
+		listitem.add_context_menu_items(context_menu_items,False)
 	return listitem
+	
+@plugin.route('/deletefile/<pid>/<fid>/<warringmsg>')
+def deletefile(pid,fid,warringmsg):
+	dialog = xbmcgui.Dialog()
+	ret = dialog.yesno('删除警告', warringmsg)
+	if ret:
+		data = urllib.urlencode({'pid': pid,'fid':fid})	
+		data=xl.urlopen('http://web.api.115.com/rb/delete',data=data)
+		data= xl.fetch(data).replace('\n','').replace('\r','')
+		data=json.loads(data[data.index('{'):])
+		#plugin.notify(data,delay=50000)
+		if data['state']:			
+			xbmc.executebuiltin('Container.Refresh()')
+		else:
+			plugin.notify(msg='删除失败,错误信息:'+str(data['error']))
+			return
+
+@plugin.route('/mark/<fid>/<mark>')
+def mark(fid,mark):
+	data = urllib.urlencode({'fid': fid,'is_mark':mark})	
+	data=xl.urlopen('http://web.api.115.com/files/edit',data=data)
+	data= xl.fetch(data).replace('\n','').replace('\r','')
+	data=json.loads(data[data.index('{'):])
+	if data['state']:
+		xbmc.executebuiltin('Container.Refresh()')
 	
 @plugin.route('/getfile/<cid>/<offset>/<star>')
 def getfile(cid,offset,star):	
-	subcache.clear()	
-	
+	subcache.clear()
 	sorttypes = {'0': 'user_ptime','1': 'file_size','2': 'file_name'}
 	sorttype=sorttypes[plugin.get_setting('sorttype')]	
 	sortasc=str(plugin.get_setting('sortasc'))
@@ -440,20 +467,20 @@ def getfile(cid,offset,star):
 		#plugin.log.error("数据更新:"+cid+"/"+offset)
 	
 	if sorttype=='file_name':
-		data=xl.urlopen('http://aps.115.com/natsort/files.php?aid=1&cid='+str(cid)+'&type=&star='+star+'&o='+sorttype+'&asc='+sortasc+'&offset='+str(offset)+'&show_dir=1&limit='+pageitem+'&format=json')
+		data=xl.urlopen('http://aps.115.com/natsort/files.php?aid=1&cid='+str(cid)+'&type=&star='+star+'&o='+sorttype+'&asc='+sortasc+'&offset='+str(offset)+'&show_dir=1&limit='+pageitem+'&format=json'+'&_='+str(long(time.time())))
 	else:
-		data=xl.urlopen('http://web.api.115.com/files?aid=1&cid='+str(cid)+'&type=&star='+star+'&o='+sorttype+'&asc='+sortasc+'&offset='+str(offset)+'&show_dir=1&limit='+pageitem+'&format=json')
+		data=xl.urlopen('http://web.api.115.com/files?aid=1&cid='+str(cid)+'&type=&star='+star+'&o='+sorttype+'&asc='+sortasc+'&offset='+str(offset)+'&show_dir=1&limit='+pageitem+'&format=json'+'&_='+str(long(time.time())))
 	data= xl.fetch(data).replace('\n','').replace('\r','')
 	data=json.loads(data[data.index('{'):])
-	if data['state']:
+	if data['state']:		
 		imagecount=0
 		items=[]
 		for item in data['path']:
 			if item['cid']!=0 and item['cid']!=cid:
 				items.append({'label': colorize_label('返回到【'+item['name']+"】", 'back'), 'path': plugin.url_for('getfile',cid=item['cid'],offset=0,star='0')})		
 		for item in data['data']:			
-			listitem=getListItem(item)
-			if listitem!=None:
+			listitem=getListItem(item)			
+			if listitem!=None:				
 				items.append(listitem)					
 				if item.has_key('ms'):
 					imagecount+=1
@@ -625,6 +652,22 @@ def get_file_download_url(pc):
 		result = result.replace(bad_server, xl.prefer_server)
 	return result
 
+@plugin.route('/delete_offline_list/<hashinfo>/<warringmsg>')
+def delete_offline_list(hashinfo,warringmsg):
+	dialog = xbmcgui.Dialog()
+	ret = dialog.yesno('离线任务删除', warringmsg)
+	if ret:
+		data=xl.urlopen("http://115.com/lixian/?ct=lixian&ac=task_del",data=hashinfo)
+		data=xl.fetch(data)
+		data=json.loads(data[data.index('{'):])
+		
+		if data['state']:			
+			xbmc.executebuiltin('Container.Refresh()')
+		else:
+			plugin.notify(msg='删除失败,错误信息:'+str(data['error']))
+			return
+	
+	
 @plugin.route('/offline_list')
 def offline_list():
 	msg_st={'-1': '任务失败','0': '任务停止','1': '下载中','2': '下载完成'}
@@ -632,18 +675,18 @@ def offline_list():
 	data=xl.fetch(data)
 	data=json.loads(data[data.index('{'):])
 	sign=data['sign']
-	time1=data['time']
+	_time=data['time']
 	uid = xl.getcookieatt('.115.com', 'UID')
 	uid = uid[:uid.index('_')]
 	page=1
 	task=[]
 	items=[]
 	while True:
-		data = urllib.urlencode({'page': str(page),'uid':uid,'sign':sign,'time':time1})
+		data = urllib.urlencode({'page': str(page),'uid':uid,'sign':sign,'time':_time})
 		data=xl.urlopen("http://115.com/lixian/?ct=lixian&ac=task_lists",data=data)
 		data=xl.fetch(data)
 		data=json.loads(data[data.index('{'):])
-		if data['state']:
+		if data['state'] and data['tasks']:
 			for item in data['tasks']:
 				task.append(item)
 			if data['page_count']>page:
@@ -652,9 +695,35 @@ def offline_list():
 				break
 		else:
 			break
+	
+	clearcomplete={'time':_time,'sign':sign,'uid':uid}
+	clearfaile={'time':_time,'sign':sign,'uid':uid}
+	i=0
+	j=0
+	
 	for item in task:
-		items.append({'label': item['name']+colorize_label("["+msg_st[str(item['status'])]+"]", str(item['status'])), 
-					'path': plugin.url_for('getfile',cid=item['file_id'],offset='0',star='0')})
+		if item['status']==2 and item['move']==1:
+			clearcomplete['hash['+str(i)+']']=item['info_hash']
+			i+=1
+		if item['status']==-1:
+			clearfaile['hash['+str(j)+']']=item['info_hash']
+			j+=1
+		
+		listitem=ListItem(label=item['name']+colorize_label("["+msg_st[str(item['status'])]+"]", str(item['status'])), label2=None, icon=None, thumbnail=None, path=plugin.url_for('getfile',cid=item['file_id'],offset='0',star='0'))
+		_hash = urllib.urlencode({'uid':uid,'sign':sign,'time':_time,r'hash[0]': item['info_hash']})		
+		listitem.add_context_menu_items([('删除离线任务', 'RunPlugin('+plugin.url_for('delete_offline_list',hashinfo=_hash,warringmsg='是否删除任务')+')',)],False)
+		
+		items.append(listitem)
+	if j>0:
+		_hash = urllib.urlencode(clearfaile)
+		items.insert(0, {
+			'label': colorize_label('清空失败任务','-1'),
+			'path': plugin.url_for('delete_offline_list',hashinfo=_hash,warringmsg='是否清空'+str(j)+'个失败任务')})
+	if i>0:
+		_hash = urllib.urlencode(clearcomplete)
+		items.insert(0, {
+			'label': colorize_label('清空完成任务','2'),
+			'path': plugin.url_for('delete_offline_list',hashinfo=_hash,warringmsg='是否清空'+str(i)+'个完成任务')})
 	return items
 	
 @plugin.route('/lxlist/<cid>/<name>')
@@ -776,7 +845,7 @@ def getnote(nid):
 @plugin.route('/offline/<url>')
 def offline(url):
 	xbmc.executebuiltin( "ActivateWindow(busydialog)" )
-	xbmc.sleep(1000)
+	#xbmc.sleep(1000)
 	data=xl.urlopen("http://115.com/?ct=offline&ac=space&_="+str(time.time()))
 	data=xl.fetch(data)
 	data=json.loads(data[data.index('{'):])
@@ -841,40 +910,203 @@ def offlinedown(url,title='',msg=''):
 				plugin.notify('离线任务未完成,请稍候从离线列表进入查看任务状态')
 
 
-def _http(url, data=None):
-    """
-    open url
-    """
-    req = urllib2.Request(url)
-    req.add_header('User-Agent', 'Mozilla/5.0 (X11; Linux x86_64) {0}{1}'.
-                   format('AppleWebKit/537.36 (KHTML, like Gecko) ',
-                          'Chrome/28.0.1500.71 Safari/537.36'))
-    req.add_header('Accept-encoding', 'gzip,deflate')
-    if data:
-        rsp = urllib2.urlopen(req, data=data, timeout=30)
-    else:
-        rsp = urllib2.urlopen(req, timeout=30)
-    if rsp.info().get('Content-Encoding') == 'gzip':
-        buf = StringIO(rsp.read())
-        f = gzip.GzipFile(fileobj=buf)
-        data = f.read()
-    else:
-        data = rsp.read()
-    rsp.close()
-    return data
+class BaseWindowDialog(xbmcgui.WindowXMLDialog):
+	def __init__( self, *args, **kwargs):
+		self.session = None
+		self.oldWindow = None
+		self.busyCount = 0
+		xbmcgui.WindowXML.__init__( self )
+
+	def doClose(self):
+		self.session.window = self.oldWindow
+		self.close()
+		
+	def onInit(self):
+		
+		if self.session:
+			self.session.window = self
+		else:
+			try:
+				self.session = VstSession(self)
+			except:
+				self.close()
+		self.setSessionWindow()
+		
+	def onFocus( self, controlId ):
+		self.controlId = controlId
+		
+	def setSessionWindow(self):
+		try:
+			self.oldWindow = self.session.window
+		except:
+			self.oldWindow=self
+		self.session.window = self
+		
+	def onAction(self,action):
+		if action.getId() == ACTION_PARENT_DIR or action.getId() == ACTION_PREVIOUS_MENU:
+			self.doClose()
+		else:
+			return False
+
+		return True
+
+	def showBusy(self):
+		if self.busyCount > 0:
+			self.busyCount += 1
+		else:
+			self.busyCount = 1
+			xbmc.executebuiltin("ActivateWindow(busydialog)")
+
+
+	def hideBusy(self):
+		if self.busyCount > 0:
+			self.busyCount -= 1
+		if self.busyCount == 0:
+			xbmc.executebuiltin( "Dialog.Close(busydialog)" )
+
+
+class FilterWindow(BaseWindowDialog):
+	def __init__( self, *args, **kwargs):
+		self.cancel = True
+		self.inited = False
+		self.sdata = kwargs.get('sdata')
+		self.pdata = None
+		BaseWindowDialog.__init__( self )
+
+		
+	def onInit(self):
+		self.showBusy()
+
+		BaseWindowDialog.onInit(self)
+		self.init()
+
+		self.hideBusy()
+
+	def init(self):
+		if self.inited:
+			return
+
+		if '类型' not in filters:
+			rsp = _http('http://movie.douban.com/category/')
+			fts = re.findall(
+				r'class="label">([^>]+?)</h4>\s+<ul>(.*?)</ul>', rsp, re.S)
+			typpatt = re.compile(r'<a href="#">([^>]+?)</a>')
+			for ft in fts:
+				typs = typpatt.findall(ft[1])
+				#if '类型' not in ft[0]:
+				typs.insert(0, '不限')
+				filters[ft[0]] =  tuple(typs)
+		index=0
+		for filtername,filter in filters:
+			cl = self.getControl(1620 + index)
+			
+			listitem = xbmcgui.ListItem(label=u'全部' +filtername, label2='')
+			cl.addItem(listitem)
+
+			if self.sdata.has_key(filters[filtername]):
+				selectedValue = self.sdata[filters[filtername]]
+			else:
+				selectedValue = ''
+				listitem.select(True)
+
+			for i in range(len(filter)):
+				item = filter[i]
+				listitem = xbmcgui.ListItem(label=item)
+				cl.addItem(listitem)
+				if item == selectedValue:
+					listitem.select(True)
+			index+=1
+		
+		self.inited = True
+
+	def select(self):
+		self.doModal()
+
+		if self.cancel == True:
+			return self.sdata
+
+		for i in range(4):
+			cl = self.getControl(1620 + i)
+			for index in  range(0, cl.size()):
+				if cl.getListItem(index).isSelected():
+					if self.pdata[i]['cat'] == 'ob':
+						self.sdata[self.pdata[i]['cat']] = self.pdata[i]['items'][index]['value']
+					elif index > 0:
+						self.sdata[self.pdata[i]['cat']] = self.pdata[i]['items'][index - 1]['value']
+					else:
+						if self.sdata.has_key(self.pdata[i]['cat']):
+							del(self.sdata[self.pdata[i]['cat']])
+
+		return self.sdata
+
+
+	def updateSelection(self, controlId):
+		if controlId >= 1620 and controlId <= 1623:
+			selected = self.getControl(controlId).getSelectedPosition()
+			for index in  range(self.getControl(controlId).size()):
+				if index != selected and self.getControl(controlId).getListItem(index).isSelected() == True:
+					self.getControl(controlId).getListItem(index).select(False)
+			self.getControl(controlId).getSelectedItem().select(True)
+
+	def onClick( self, controlId ):
+		if controlId == 1610:
+			for i in range(4):
+				cl = self.getControl(1620 + i)
+				for index in  range(1, cl.size()):
+					cl.getListItem(index).select(False)
+				cl.getListItem(0).select(True)
+
+		self.cancel = False
+		self.doClose()
+
+	def onAction(self,action):
+		BaseWindowDialog.onAction(self, action)
+		Id = action.getId()
+		if Id == ACTION_MOVE_LEFT or  Id == ACTION_MOVE_RIGHT or Id == ACTION_MOUSE_MOVE:
+			self.updateSelection(self.getFocusId())
+			
+def FilterWindow(session=None,**kwargs):
+	w = FilterWindow('filter.xml' , __cwd__, "Default",session=session,**kwargs)
+	ret = w.select()
+	del w
+	return ret
+
+def _http(url, data=None,ssl=False):
+	"""
+	open url
+	"""
+	req = urllib2.Request(url)
+	req.add_header('User-Agent', 'Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; Trident/5.0)')
+	req.add_header('Accept-encoding', 'gzip,deflate')
+	req.add_header('Accept-Language', 'zh-cn')
+
+	if data:
+		rsp = urllib2.urlopen(req, data=data, timeout=30)
+	else:
+		rsp = urllib2.urlopen(req, timeout=30)
+	if rsp.info().get('Content-Encoding') == 'gzip':
+		buf = StringIO(rsp.read())
+		f = gzip.GzipFile(fileobj=buf)
+		data = f.read()
+	else:
+		data = rsp.read()
+	rsp.close()
+	return data
 	
 @plugin.route('/dbmovie')
 def dbmovie():
 	
-	if '类型' not in filters:
+	if 'category' not in filters:
+		filters['category']=['all','movie','tv']
+		
 		rsp = _http('http://movie.douban.com/category/')
 		fts = re.findall(
 			r'class="label">([^>]+?)</h4>\s+<ul>(.*?)</ul>', rsp, re.S)
 		typpatt = re.compile(r'<a href="#">([^>]+?)</a>')
 		for ft in fts:
 			typs = typpatt.findall(ft[1])
-			if '类型' not in ft[0]:
-				typs.insert(0, '不限')
+			#if '类型' not in ft[0]:
+			typs.insert(0, '不限')
 			filters[ft[0]] =  tuple(typs)
 	typs = filters['类型']
 	menus = [{'label': t,
@@ -890,6 +1122,11 @@ def dbcate(typ, page):
 			   'page': page, 'ck': 'null', 'types[]': ''}
 	typ = eval(typ)	
 	dialog = xbmcgui.Dialog()
+	if 'category' in typ and not typ['category']:
+		sel = dialog.select('影视选择', ['全部影视','电影','电视'])
+		if sel is -1: return
+		typ['category'] = filters['category'][sel]
+
 	if 'district' in typ and not typ['district']:
 		#plugin.notify(filters['地区'])
 		sel = dialog.select('地区', filters['地区'])
@@ -899,6 +1136,8 @@ def dbcate(typ, page):
 		sel = dialog.select('年代', filters['年代'])
 		if sel is -1: return
 		typ['era'] = filters['年代'][sel]
+	
+		
 	params.update(typ)	
 	data = urllib.urlencode(params)		
 	rsp = _http('http://movie.douban.com/category/q',data.replace(urllib2.quote('不限'), ''))
@@ -906,7 +1145,7 @@ def dbcate(typ, page):
 	minfo = json.loads(rsp)
 	menus = [{'label': '[%s].%s[%s][%s]' % (m['release_year'], m['title'],
 										   m['rate'], m['abstract']),
-			  'path': plugin.url_for('btsearch', website='0',sstr=m['title'].split(' ')[0].encode('utf-8'),sorttype='-1',page='1' ),
+			  'path': plugin.url_for('btsearchInit', sstr=m['title'].split(' ')[0].encode('utf-8')),
 			  'thumbnail': m['poster'].replace('ipst','spst').replace('img3.douban.com','img4.douban.com'),
 			  } for m in minfo['subjects']]	
 	
@@ -918,7 +1157,7 @@ def dbcate(typ, page):
 		'dbcate', typ=str(typ), page=int(page)+1)})
 		
 	ntyp = typ.copy()
-	ntyp.update({'district': '', 'era': ''})
+	ntyp.update({'district': '', 'era': '', 'category': ''})
 	menus.insert(0, {'label': '【按照条件过滤】【地区】【年代】选择',
 		'path': plugin.url_for('dbcate',typ=str(ntyp), page=1)})
 	setthumbnail['set']=True
@@ -943,7 +1182,7 @@ def dbactor(sstr, page):
 	mitems = patt.findall(rsp)
 	if not mitems: return
 	menus = [{'label': '{0}. {1}[{2}][{3}]'.format(s, i[1], i[3], i[2]),
-			 'path': plugin.url_for('btsearch',  website='0',sstr=i[1],sorttype='-1',page='1' ),
+			 'path': plugin.url_for('btsearchInit', sstr=i[1]),
 			 'thumbnail': i[0].replace('ipst','spst').replace('img3.douban.com','img4.douban.com'),
 		 } for s, i in enumerate(mitems)]
 
@@ -979,7 +1218,7 @@ def dbntop():
 	mpatt = re.compile(mstr, re.S)
 	mitems = mpatt.findall(rsp)
 	menus = [{'label': '{0}. {1}[{2}][{3}]'.format(s, i[1], i[3], i[2]),
-			 'path': plugin.url_for('btsearch', website='0', sstr=i[1],sorttype='-1',page='1' ),
+			 'path': plugin.url_for('btsearchInit', sstr=i[1]),
 			 'thumbnail': i[0].replace('ipst','spst').replace('img3.douban.com','img4.douban.com'),
 		 } for s, i in enumerate(mitems)]
 	setthumbnail['set']=True
@@ -1002,7 +1241,7 @@ def dbtop(page):
 	menus = [{'label': '{0}. {1}[{2}]'.format(s+pc+1, i[0], ''.join(
 		i[2].replace('&nbsp;', ' ').replace('<br>', ' ').replace(
 			'\n', ' ').split(' '))),
-			  'path': plugin.url_for('btsearch',  website='0', sstr=i[0],sorttype='-1',page='1' ),
+			  'path': plugin.url_for('btsearchInit', sstr=i[0]),
 			  'thumbnail': i[1].replace('ipst','spst').replace('img3.douban.com','img4.douban.com'),
 		 } for s, i in enumerate(mitems)]
 	# if  page != 0:
@@ -1101,7 +1340,7 @@ def colorize_label(label, _class=None, color=None):
 
 	return '[COLOR %s]%s[/COLOR]' % (color, label)
 
-
+#plugin.notify(plugin.url_for('deletefile',pid='cid',fid='fid'))
 if __name__ == '__main__':
 	plugin.run()	
 	skindir=xbmc.getSkinDir()
